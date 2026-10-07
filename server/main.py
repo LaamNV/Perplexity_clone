@@ -1,4 +1,5 @@
 import asyncio
+import time
 from fastapi import FastAPI, WebSocket
 
 from pydantic_models.chat_body import ChatBody
@@ -12,45 +13,53 @@ search_service = SearchService()
 sort_source_service = SortSourceService()
 llm_service = LLMService()
 
-# chat websocket
+
 @app.websocket("/ws/chat")
 async def websocket_chat_endpoint(websocket: WebSocket):
     await websocket.accept()
     
     try:
-        await asyncio.sleep(0.1)
         data = await websocket.receive_json()
-
         query = data.get("query")
 
-        search_results = search_service.web_search(query)
+        # Search
+        search_results = await asyncio.to_thread(search_service.web_search, query)
+        sorted_results = await asyncio.to_thread(sort_source_service.sort_sources, query, search_results)
 
-        sorted_results = sort_source_service.sort_sources(query, search_results)  
-        await asyncio.sleep(0.1)
         await websocket.send_json({
-            'type': 'search_result',
-            'data': sorted_results
+            "type": "search_result",
+            "data": sorted_results
         })
-        
-        
-        for chunk in llm_service.generate_response(query, sorted_results):
-            await asyncio.sleep(0.1)
-            await websocket.send_json({"type": "content", "data": chunk})
 
-            
-    except:
-        print("Unexpected error occurred")
+        # Stream LLM + đo thời gian
+        start = time.time()
+        print("Bắt đầu gọi Gemini...")
+        first_chunk = True
+
+        for chunk in llm_service.generate_response(query, sorted_results):
+            if first_chunk:
+                print(f"Nhận chunk đầu tiên sau: {time.time() - start:.2f}s")
+                first_chunk = False
+
+            await websocket.send_json({
+                "type": "content",
+                "data": chunk
+            })
+
+        print("Stream xong")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        await websocket.send_json({"type": "error", "data": str(e)})
     finally:
         await websocket.close()
 
 
-
-# chat
 @app.post("/chat")
-def chat_endpoint(body: ChatBody): 
+def chat_endpoint(body: ChatBody):
     search_results = search_service.web_search(body.query)
     sorted_results = sort_source_service.sort_sources(body.query, search_results)
+
+    full_response = "".join(llm_service.generate_response(body.query, sorted_results))
     
-    response = llm_service.generate_response(body.query, sorted_results)
-    
-    return {"response": response}
+    return {"response": full_response}

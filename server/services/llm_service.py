@@ -1,32 +1,52 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from config import Settings
 
 settings = Settings()
 
+
 class LLMService:
     def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
-        
-    def generate_response(self, query: str, search_results: list[dict]):
+        self.client = genai.Client(
+            api_key=settings.GEMINI_API_KEY
+        )
+
+    def generate_response(
+        self,
+        query: str,
+        search_results: list[dict]
+    ):
         context_text = "\n\n".join([
-            f"Source {i+1} ({result['url']}):\n{result['content']}"
-            for i, result in enumerate(search_results)
+            f"Source {i+1} ({result['url']}):\n{result['content'][:4000]}"
+            for i, result in enumerate(search_results[:5])
             if result.get("content")
         ])
-        
-        full_prompt = f"""
-Context from web search:
+
+        prompt = f"""
+Sử dụng các nguồn web dưới đây để trả lời câu hỏi.
+
+Nguồn:
 {context_text}
 
-Query: {query}
+Câu hỏi:
+{query}
 
-Please provide a comprehensive, detailed, well-cited and accurate response using only the context above.
-Think step-by-step. Answer the question clearly and thoroughly.
-Avoid using outside knowledge unless strictly necessary.
+Yêu cầu:
+- Trả lời chính xác dựa trên các nguồn đã cho.
+- Trích dẫn nguồn liên quan.
+- Trả lời hoàn toàn bằng tiếng Việt.
+- Ngắn gọn, rõ ràng, không giải thích thừa.
 """
 
-        response = self.model.generate_content(full_prompt, stream=True)
-        
+        response = self.client.models.generate_content_stream(
+    model="gemini-2.5-flash",
+    contents=prompt,
+    config=types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=4000,
+    ),
+)
+
         for chunk in response:
-            yield chunk.text
+            if chunk.text:
+                yield chunk.text
